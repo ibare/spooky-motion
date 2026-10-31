@@ -25,17 +25,36 @@ Final Cut Pro에서 쓰는 Motion 템플릿(효과, 트랜지션, 타이틀, 제
 | 팩 | 카테고리 | 내용 |
 |---|---|---|
 | [lecture-pip](packs/lecture-pip/README.md) | 강의 PIP | 강사 PIP 배치 효과(크게 / 작게 · 아래 / 작게 · 위)와, 앞뒤 배치를 스스로 알아내는 전환 |
+| [skin-retouch](packs/skin-retouch/README.md) | 피부 보정 | 얼굴 피부 보정 효과. FxPlug 플러그인(`fxplug/skin-retouch`)을 감싼 템플릿 |
+
+## FxPlug 플러그인
+
+Motion 필터만으로 안 되는 효과는 FxPlug 플러그인(Swift + Metal)으로 직접 만듭니다. 혼자 쓰는 용도라서 이 맥의 개발 인증서로만 서명합니다.
+
+```sh
+fxplug/skin-retouch/build.sh   # 빌드 → ~/Applications 에 설치 → 등록
+./install.sh                   # FCP 에서 보이게 감싸는 템플릿 설치
+```
+
+- 필요한 것: Xcode, FxPlug SDK, `xcodegen`. 자세한 내용은 `docs/fxplug-notes.md`에 있습니다.
+- FCP는 플러그인을 Motion 템플릿으로 감싸야 보여 줍니다. 감싸는 템플릿은 해당 팩의 `generate.py`가 만듭니다.
 
 ## 구조
 
 ```
 install.sh            모든 팩 생성 → 검사(xmllint) → 설치
-lib/ozml.py           공용 도구: XML, 그룹·도형·클론, 리그 팝업/체크박스, 키프레임 곡선, 드롭존
+lib/ozml.py           공용 도구: XML, 그룹·도형·클론, 리그 팝업/체크박스, 키프레임 곡선, 드롭존, 필터
 docs/ozml-notes.md    OZML 작업 노트: 번호의 뜻, 함정, 조사 방법
+docs/fxplug-notes.md  FxPlug 작업 노트: 구조, 빌드·서명 함정, 쓸 수 있는 API
 packs/<팩>/
   generate.py         생성기 (`--out <폴더>`)
   templates/          (선택) Motion에서 직접 만든 템플릿. <종류>.localized/<카테고리>/... 구조 그대로
   README.md           사용법
+fxplug/<플러그인>/
+  project.yml         Xcode 프로젝트 설정 (XcodeGen). .xcodeproj 는 build.sh 가 만든다
+  build.sh            빌드 → 설치 → 등록
+  App/                그릇 앱
+  Plugin/             플러그인 코드와 Metal 셰이더
 ```
 
 만든 결과물(`build/`)은 언제든 다시 만들 수 있어서 커밋하지 않습니다.

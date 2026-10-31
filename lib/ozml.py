@@ -60,6 +60,7 @@ UUID = {
     "ChDouble": "fdc1944b229111d7b1c300039389b702",
     "Channel": "46c844a813d311d8a438000a95af9f7e",
     "ChOpacity": "27f3ee8b229211d7925a00039389b702",
+    "ProPlugin Filter": "deca4859b16011d7a12d0003936f6f92",  # 필터(애플 PAE 필터와 FxPlug 플러그인 모두)
 }
 GROUP_UUID = "ee6b4918387a11d7a02100039375d2ba"  # 그룹(layer) 팩토리, 리그 대상 지정에만 쓴다
 
@@ -371,8 +372,23 @@ def clone_layer(F, cid, name, source_id, props, tail=()):
     ])
 
 
-def effect_source(F, sid, clip_id, props=None):
-    """효과(.moef)에서 FCP 클립이 들어오는 자리. footage 에 'Drop Zone.tiff' 클립이 있어야 한다."""
+def fxplug_filter(F, fid, name, plugin_uuid, plugin_version, params=(), plugin_name=None):
+    """레이어에 거는 필터 (FxPlug 플러그인 또는 애플 PAE 필터).
+    plugin_uuid 는 플러그인 Info.plist 의 ProPlugPlugInList uuid 다.
+    plugin_name 을 주지 않으면 name 과 같게 둔다 (Beauty Box 템플릿처럼). 애플 필터는 클래스 이름이다.
+    params 에는 기본값과 다른 파라미터만 넣는다 (애플 Sepia, Beauty Box 템플릿과 같다).
+    인스펙터에 보이려면 publish target 의 channel 을 "./<파라미터 id>" 로 둔다."""
+    return E("filter", {"name": name, "id": fid, "factoryID": F["ProPlugin Filter"],
+                        "pluginUUID": plugin_uuid, "pluginVersion": plugin_version,
+                        "pluginName": plugin_name or name, "pluginDynamicParams": 0}, [
+        timing(),
+        V("baseFlags", 8589934608),
+    ] + list(params))
+
+
+def effect_source(F, sid, clip_id, props=None, filters=()):
+    """효과(.moef)에서 FCP 클립이 들어오는 자리. footage 에 'Drop Zone.tiff' 클립이 있어야 한다.
+    filters 는 이 레이어에 거는 필터(fxplug_filter)이고, Object 파라미터 뒤에 붙는다."""
     return E("scenenode", {"name": "Effect Source", "id": sid, "factoryID": F["Image"], "version": 5}, [
         V("validTracks", 1), V("aspectRatio", 1), V("flags", 0), timing(),
         V("foldFlags", 16384), V("baseFlags", 524304),
@@ -399,7 +415,7 @@ def effect_source(F, sid, clip_id, props=None):
             P("Width", 313, 8589934610, 1, OUT_W),
             P("Height", 314, 8589934610, 1, OUT_H),
         ]),
-    ])
+    ] + list(filters))
 
 
 def transition_source(F, name, nid, clip_id, zone_type):

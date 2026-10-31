@@ -36,6 +36,7 @@ Motion 템플릿(.moef 효과, .motr 트랜지션, .moti 타이틀, .motn 제너
 | 채널: Opacity | 27f3ee8b229211d7925a00039389b702 |
 | 채널: 일반 | 46c844a813d311d8a438000a95af9f7e |
 | 그룹(layer) | ee6b4918387a11d7a02100039375d2ba — 리그 `affectingFactory`에만 씁니다 |
+| ProPlugin Filter (필터) | deca4859b16011d7a12d0003936f6f92 — 11절 |
 
 ## 2. 파라미터 ID
 
@@ -140,3 +141,16 @@ Motion 템플릿(.moef 효과, .motr 트랜지션, .moti 타이틀, .motn 제너
 - **Motion 문자열**: `/Applications/Motion.app/Contents/Frameworks/*/Resources/en.lproj/*.strings`에 메뉴 항목 순서가 있습니다. 예: `Blend Modes`.
 - **FCP 캡처 분석**: 사용자가 보내 준 뷰어 캡처에서 사본들의 위치와 크기를 재고, 가설마다 예상 위치를 계산해서 맞춰 봅니다. 어떤 그룹이 보이는지 역산할 수 있습니다.
 - **Motion 창 캡처**: `screencapture -x -o -l <창 id>`를 씁니다. 창 id는 CGWindowListCopyWindowInfo로 찾습니다. 단, `open -a Motion 파일`로는 문서가 열리지 않은 적이 있습니다.
+
+## 11. 필터 (애플 필터와 FxPlug 플러그인)
+
+- **팩토리**: 애플 필터(PAE…)와 FxPlug 플러그인 모두 `ProPlugin Filter` 팩토리(`deca4859b16011d7a12d0003936f6f92`)를 씁니다.
+  - 애플 템플릿: `Sepia.moef`의 factory 11.
+  - 서드파티 템플릿: `Beauty Box.moef`(Digital Anarchy)의 factory 6.
+- **필터 요소**: `<filter name id factoryID pluginUUID pluginVersion pluginName pluginDynamicParams="0">`를 레이어 노드 안의 `Object` 파라미터 **뒤에** 둡니다(`ozml.fxplug_filter`, `effect_source(filters=...)`).
+  - 안에는 `timing`, `<baseFlags>8589934608</baseFlags>`를 두고, **기본값과 다른 파라미터만** 적습니다(두 템플릿 모두 같습니다).
+  - `pluginUUID`는 플러그인 Info.plist의 `ProPlugPlugInList` → `uuid`입니다.
+  - `pluginName`은 애플 필터는 클래스 이름(`PAEGaussianBlur`), Beauty Box는 표시 이름(`Beauty Box`)이라 일정하지 않습니다. 찾을 때는 UUID를 쓰는 것으로 보입니다(추정).
+  - `pluginVersion`은 Info.plist의 version과 꼭 같지는 않습니다. 애플 템플릿의 Gaussian Blur는 2인데 지금 plist는 3입니다.
+- **퍼블리시**: 필터 파라미터는 `<target object="필터 id" channel="./<파라미터 id>"/>`로 퍼블리시합니다. 묶음 안의 파라미터는 `./9/37`처럼 이어 씁니다(`Beauty Box.moef`).
+- **FCP에서 FxPlug 플러그인을 쓰려면 반드시 이렇게 템플릿으로 감싸야 합니다.** 근거: 애플 문서 'Preparing plug-ins for use in Final Cut Pro'. 플러그인 쪽 사실은 `docs/fxplug-notes.md`에 있습니다.
