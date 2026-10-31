@@ -37,6 +37,21 @@ fxplug/skin-retouch/build.sh   # 빌드 → ~/Applications 에 설치 → 등록
 ```
 
 - 필요한 것: Xcode, FxPlug SDK, `xcodegen`. 자세한 내용은 `docs/fxplug-notes.md`에 있습니다.
+
+## 워크플로 확장
+
+FCP 안에 창으로 뜨는 도구는 워크플로 확장으로 만듭니다. 플레이헤드를 읽고 옮길 수 있습니다.
+
+```sh
+workflow/loudness-check/build.sh   # 빌드 → /Applications 에 설치 → 등록
+```
+
+- `loudness-check`: 음량 검사 패널. FCP의 윈도우 메뉴 > 확장 프로그램 > '음량 검사'.
+  - FCP에서 소리만 WAV로 `~/Movies/LoudnessCheck`에 내보내면 자동으로 잽니다. 5개 값(Integrated, Short-Term Max, Momentary Max, Loudness Range, True Peak), 목표(강의 -16 / 유튜브 -14 LUFS) 대비 조정량, 음량 그래프, 문제 구간(튐, 피크, 작음)을 보여 줍니다.
+  - 그래프나 문제 구간을 누르면 FCP 플레이헤드가 그 위치로 갑니다.
+  - 공유 대상은 처음 한 번만 만듭니다: Final Cut Pro > Settings…(⌘,) > Destinations 탭에서 Add Destination을 누르고 Export File을 왼쪽 목록으로 끌어 놓은 뒤, Format은 Audio Only, Audio file format은 WAVE로 정합니다. File > Share 하위 메뉴는 타임라인이나 프로젝트가 선택돼 있어야 쓸 수 있습니다.
+- 처음 열 때 'Final Cut Pro 제어' 허락 창이 뜨면 허용합니다. 프로젝트 정보를 읽는 데 필요합니다.
+- 필요한 것: Xcode, Workflow Extension SDK, `xcodegen`. 자세한 내용은 `docs/workflow-ext-notes.md`에 있습니다.
 - FCP는 플러그인을 Motion 템플릿으로 감싸야 보여 줍니다. 감싸는 템플릿은 해당 팩의 `generate.py`가 만듭니다.
 
 ## 구조
@@ -46,6 +61,7 @@ install.sh            모든 팩 생성 → 검사(xmllint) → 설치
 lib/ozml.py           공용 도구: XML, 그룹·도형·클론, 리그 팝업/체크박스, 키프레임 곡선, 드롭존, 필터
 docs/ozml-notes.md    OZML 작업 노트: 번호의 뜻, 함정, 조사 방법
 docs/fxplug-notes.md  FxPlug 작업 노트: 구조, 빌드·서명 함정, 쓸 수 있는 API
+docs/workflow-ext-notes.md  워크플로 확장 작업 노트: 구조, 자동화 허락 함정, 타임라인 API 동작
 packs/<팩>/
   generate.py         생성기 (`--out <폴더>`)
   templates/          (선택) Motion에서 직접 만든 템플릿. <종류>.localized/<카테고리>/... 구조 그대로
@@ -55,6 +71,11 @@ fxplug/<플러그인>/
   build.sh            빌드 → 설치 → 등록
   App/                그릇 앱
   Plugin/             플러그인 코드와 Metal 셰이더
+workflow/<확장>/
+  project.yml         Xcode 프로젝트 설정 (XcodeGen). .xcodeproj 는 build.sh 가 만든다
+  build.sh            빌드 → /Applications 에 설치 → 등록
+  App/                그릇 앱
+  Extension/          FCP 안에 뜨는 패널
 ```
 
 만든 결과물(`build/`)은 언제든 다시 만들 수 있어서 커밋하지 않습니다.

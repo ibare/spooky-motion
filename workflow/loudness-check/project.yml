@@ -1,0 +1,64 @@
+# 음량 검사 워크플로 확장의 Xcode 프로젝트 설정 (XcodeGen)
+#
+# 이 파일이 원본이고 LoudnessCheck.xcodeproj 는 build.sh 가 만든다 (커밋하지 않는다).
+# 구성은 Workflow Extension SDK 의 Xcode 템플릿
+# (/Library/Developer/Xcode/Templates/ProVideo/WorkflowExtension/FCP Workflow Extension.xctemplate)을 따랐다.
+#   - LoudnessCheck.app            : 확장을 담는 그릇 앱.
+#   - LoudnessCheckExtension.appex : FCP 안에 뜨는 패널. 앱의 Contents/PlugIns 안에 들어간다.
+# 사용자 혼자 쓰므로 이 맥의 Apple Development 인증서로 서명하고 공증은 하지 않는다.
+
+name: LoudnessCheck
+options:
+  bundleIdPrefix: com.ibare.spooky
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    ARCHS: arm64
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: 5NK357FRB5
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: Apple Development
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  LoudnessCheck:
+    type: application
+    platform: macOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ibare.spooky.LoudnessCheck
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - target: LoudnessCheckExtension
+        embed: true
+    scheme: {}
+
+  LoudnessCheckExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Extension
+        excludes: ["Info.plist", "Extension.entitlements"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ibare.spooky.LoudnessCheck.Extension
+        INFOPLIST_FILE: Extension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Extension/Extension.entitlements
+        # 아래는 SDK 템플릿의 설정 그대로다.
+        # ADDITIONAL_SDKS 를 붙이면 /Library/Frameworks, /usr/lib 가 SDK 안의 경로로도 찾아진다.
+        ADDITIONAL_SDKS: /Library/Developer/SDKs/WorkflowExtensionSDK.sdk
+        FRAMEWORK_SEARCH_PATHS: ["/Library/Frameworks", "$(inherited)"]
+        HEADER_SEARCH_PATHS: ["/usr/include", "$(inherited)"]
+        LIBRARY_SEARCH_PATHS: ["/usr/lib", "$(inherited)"]
+        OTHER_LDFLAGS: ["-fapplication-extension", "-lProExtension"]
+        LD_ENTRY_POINT: _ProExtensionMain
+        SWIFT_OBJC_BRIDGING_HEADER: Extension/BridgingHeader.h
+        # ProExtensionHost.framework 는 실행할 때 FCP 가 넘겨 준 것을 불러온다 (libProExtension 의
+        # loadPlugInSupportFrameworks). 확장이 직접 링크하면 실행할 때 프레임워크를 못 찾으므로
+        # Swift 의 자동 링크를 끈다. build.sh 가 otool 로 링크되지 않았는지 검사한다.
+        OTHER_SWIFT_FLAGS: ["$(inherited)", "-Xfrontend", "-disable-autolink-framework", "-Xfrontend", "ProExtensionHost"]
+        SKIP_INSTALL: YES
