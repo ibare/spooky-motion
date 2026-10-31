@@ -21,6 +21,7 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         static let amount: UInt32 = 13
         static let size: UInt32 = 14
         static let detail: UInt32 = 15
+        static let spots: UInt32 = 16
     }
 
     private let apiManager: PROAPIAccessing
@@ -39,7 +40,7 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         let d = RetouchParams()
         let flags = FxParameterFlags(kFxParameterFlag_DEFAULT)
         api.addPopupMenu(withName: "보기", parameterID: Param.view, defaultValue: UInt32(d.view),
-                         menuEntries: ["결과", "피부 마스크"], parameterFlags: flags)
+                         menuEntries: ["결과", "피부 마스크", "잡티 표시"], parameterFlags: flags)
         api.addFloatSlider(withName: "정도", parameterID: Param.amount,
                            defaultValue: Double(d.amount * 100), parameterMin: 0, parameterMax: 100,
                            sliderMin: 0, sliderMax: 100, delta: 1, parameterFlags: flags)
@@ -48,6 +49,9 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
                            sliderMin: 0.5, sliderMax: 6, delta: 0.1, parameterFlags: flags)
         api.addFloatSlider(withName: "결 살리기", parameterID: Param.detail,
                            defaultValue: Double(d.detail * 100), parameterMin: 0, parameterMax: 100,
+                           sliderMin: 0, sliderMax: 100, delta: 1, parameterFlags: flags)
+        api.addFloatSlider(withName: "잡티 지우기", parameterID: Param.spots,
+                           defaultValue: Double(d.spots * 100), parameterMin: 0, parameterMax: 100,
                            sliderMin: 0, sliderMax: 100, delta: 1, parameterFlags: flags)
         api.addFloatSlider(withName: "피부색 범위", parameterID: Param.tolerance,
                            defaultValue: Double(d.tolerance), parameterMin: 0.5, parameterMax: 6.0,
@@ -74,19 +78,21 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         var view: Int32 = 0
         var beard = ObjCBool(true)
         var tolerance = Double(p.tolerance), amount = Double(p.amount * 100)
-        var size = Double(p.size * 100), detail = Double(p.detail * 100)
+        var size = Double(p.size * 100), detail = Double(p.detail * 100), spots = Double(p.spots * 100)
         api.getIntValue(&view, fromParameter: Param.view, at: renderTime)
         api.getBoolValue(&beard, fromParameter: Param.excludeBeard, at: renderTime)
         api.getFloatValue(&tolerance, fromParameter: Param.tolerance, at: renderTime)
         api.getFloatValue(&amount, fromParameter: Param.amount, at: renderTime)
         api.getFloatValue(&size, fromParameter: Param.size, at: renderTime)
         api.getFloatValue(&detail, fromParameter: Param.detail, at: renderTime)
+        api.getFloatValue(&spots, fromParameter: Param.spots, at: renderTime)
         p.view = view
         p.excludeBeard = beard.boolValue
         p.tolerance = Float(tolerance)
         p.amount = Float(amount / 100)
         p.size = Float(size / 100)
         p.detail = Float(detail / 100)
+        p.spots = Float(spots / 100)
         pluginState?.pointee = withUnsafeBytes(of: &p) { NSData(bytes: $0.baseAddress, length: $0.count) }
     }
 
@@ -122,8 +128,8 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         }
         cb.label = "SkinRetouch"
 
-        // 정도가 0 이고 결과 보기이면 원본 그대로라 얼굴을 찾을 필요가 없다.
-        let needFace = p.view == Int32(VM_Mask.rawValue) || p.amount > 0
+        // 결과 보기에서 정도와 잡티 지우기가 모두 0 이면 원본 그대로라 얼굴을 찾을 필요가 없다.
+        let needFace = p.view != Int32(VM_Result.rawValue) || p.amount > 0 || p.spots > 0
         let analysis = needFace
             ? src.ioSurface.flatMap {
                 FaceAnalyzer.analyze($0, topLeftOrigin: src.imageOrigin == UInt(kFxImageOrigin_TOP_LEFT),
@@ -163,7 +169,7 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         guard due else { return }
 
         let b = dst.tilePixelBounds
-        let head = "render 보기=\(p.view) 정도=\(p.amount) 크기=\(p.size) 결=\(p.detail) \(timing) "
+        let head = "render 보기=\(p.view) 정도=\(p.amount) 크기=\(p.size) 결=\(p.detail) 잡티=\(p.spots) \(timing) "
             + "\(b.right - b.left)x\(b.top - b.bottom) 원점=\(src.imageOrigin)"
         if let a {
             let m = a.skin.mean

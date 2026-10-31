@@ -15,7 +15,8 @@ typedef enum TextureIndex {
     TI_Region  = 1,   // 얼굴 영역 마스크 (특징점으로 그리고 흐린 것)
     TI_LowPass = 2,   // 피부색 판정용 저해상도 흐린 영상
     TI_MeanA   = 3,   // 가이드 필터 계수 a 의 평균 (저해상도)
-    TI_MeanB   = 4    // 가이드 필터 계수 b 의 평균 (저해상도)
+    TI_MeanB   = 4,   // 가이드 필터 계수 b 의 평균 (저해상도)
+    TI_SpotFine = 5   // 잡티 찾기: 모공이 사라질 만큼만 흐린 영상
 } TextureIndex;
 
 typedef enum FragmentIndex {
@@ -30,7 +31,8 @@ typedef struct Vertex2D {
 /// 보기 방식 (인스펙터 '보기' 팝업 순번)
 typedef enum ViewMode {
     VM_Result = 0,
-    VM_Mask   = 1
+    VM_Mask   = 1,
+    VM_Spots  = 2    // 잡티로 판정한 곳을 원본 위에 빨갛게 표시
 } ViewMode;
 
 typedef struct SkinUniforms {
@@ -43,6 +45,9 @@ typedef struct SkinUniforms {
     float amount;             // 정도 (0 ~ 1)
     float detail;             // 결 살리기 (0 ~ 1)
     float fineRadius;         // 미세 결을 가르는 반경 (원본 픽셀)
+    float spots;              // 잡티 지우기 (0 ~ 1)
+    float spotRing;           // 잡티와 비교할 둘레의 반경 (원본 픽셀). 이보다 큰 점은 잡티로 보지 않는다
+    float spotGuard;          // 이 반경(원본 픽셀) 안에 안경테, 눈썹 같은 어두운 것이 있으면 잡티로 보지 않는다
     int viewMode;             // ViewMode
 } SkinUniforms;
 

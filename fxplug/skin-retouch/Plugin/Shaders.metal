@@ -4,6 +4,7 @@
 // 원본의 미세한 결(모공)을 일부 되돌린 뒤, 피부 마스크만큼 원본과 섞는다.
 // 가이드 필터 계수(a, b)는 저해상도에서 구하고(squareKernel, coeffKernel, MPS 흐림),
 // 여기서 원본 해상도로 q = mean(a) * I + mean(b) 를 계산한다.
+// 잡티 지우기: 모공만 지운 흐린 영상에서 둘레 8방향보다 모두 어둡거나 붉은 점을 찾아 둘레 피부색으로 메운다.
 
 #include <metal_stdlib>
 #include <simd/simd.h>
@@ -108,12 +109,70 @@ static float3 fineDetail(texture2d<float> source, sampler s, float2 uv, float4 c
     return c.rgb - sum / 16.0;
 }
 
+// MARK: 잡티 찾기
+
+// 주변보다 어두운 비율. 이 범위에서 0 → 1 로 잡티라고 본다 (갈색 점, 기미)
+constant float kDark0 = 0.015;
+constant float kDark1 = 0.05;
+// 주변보다 붉은 정도 (색도 r 의 차이). 붉은 뾰루지
+constant float kRed0 = 0.004;
+constant float kRed1 = 0.012;
+
+/// 작은 값 두 개 (가장 작은 것, 두 번째로 작은 것) 를 갱신한다
+static void pushMin2(thread float2 &m, float v)
+{
+    if (v < m.x) { m.y = m.x; m.x = v; }
+    else if (v < m.y) { m.y = v; }
+}
+
+/// 잡티일 정도 (0 ~ 1) 와 메울 색.
+/// 모공이 사라질 만큼 흐린 영상(fineTex)에서, 가운데를 둘레 8방향(반경 spotRing)과 비교한다.
+/// 잡티는 모든 방향보다 어둡거나 붉지만, 그늘진 경계나 주름은 한쪽(선을 따라가는 방향)이 똑같이 어둡다.
+/// 그래서 8방향 대비 중 두 번째로 작은 값을 쓴다 (옆에 다른 잡티가 하나 있어도 견딘다).
+/// (확인됨(시험 프로그램): 두 크기 흐림의 차이로 찾으면 콧볼 옆 그늘, 얼굴 가장자리, 눈 밑 주름이 잡혔다)
+/// 둘레보다 큰 점(큰 점, 콧구멍)은 둘레가 점 안에 들어가 대비가 없으므로 잡히지 않는다.
+static float spotScore(texture2d<float> fineTex, sampler s, float2 uv, constant SkinUniforms &u,
+                       thread float3 &ringMean)
+{
+    float3 center = fineTex.sample(s, uv).rgb;
+    float yc = luma(center);
+    float rc = center.r / max(center.r + center.g + center.b, 1e-4);
+    float2 o = u.texel * u.spotRing;
+    float2 dark = float2(1e9), red = float2(1e9);
+    ringMean = float3(0.0);
+    for (int i = 0; i < 8; i++) {
+        float ang = float(i) * M_PI_F / 4.0;
+        float3 c = fineTex.sample(s, uv + o * float2(cos(ang), sin(ang))).rgb;
+        ringMean += c;
+        float y = luma(c);
+        pushMin2(dark, (y - yc) / max(y, 1e-4));
+        pushMin2(red, rc - c.r / max(c.r + c.g + c.b, 1e-4));
+    }
+    ringMean /= 8.0;
+    return max(smoothstep(kDark0, kDark1, dark.y), smoothstep(kRed0, kRed1, red.y));
+}
+
+/// 둘레(반경 spotGuard)에 안경테, 눈썹, 머리카락처럼 피부보다 훨씬 어두운 것이 있으면 0.
+/// 그런 것의 가장자리는 흐린 영상에서 어두운 점처럼 보여 잡티로 잘못 잡히기 쉽다.
+static float spotGuard(texture2d<float> source, sampler s, float2 uv, constant SkinUniforms &u)
+{
+    float2 o = u.texel * u.spotGuard;
+    float g = 1.0;
+    for (int i = 0; i < 8; i++) {
+        float ang = float(i) * M_PI_F / 4.0;
+        float3 c = source.sample(s, uv + o * float2(cos(ang), sin(ang))).rgb;
+        g = min(g, smoothstep(0.35, 0.55, luma(c) / max(u.lumaRef, 1e-4)));
+    }
+    return g;
+}
+
 fragment float4 skinFragment(RasterizerData in [[stage_in]],
                              texture2d<float> source [[texture(TI_Source)]],
                              texture2d<float> region [[texture(TI_Region)]],
                              texture2d<float> lowPass [[texture(TI_LowPass)]],
                              texture2d<float> meanA [[texture(TI_MeanA)]],
                              texture2d<float> meanB [[texture(TI_MeanB)]],
+                             texture2d<float> spotFine [[texture(TI_SpotFine)]],
                              constant SkinUniforms &u [[buffer(FI_Uniforms)]])
 {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
@@ -125,10 +184,29 @@ fragment float4 skinFragment(RasterizerData in [[stage_in]],
         float3 dim = float3(luma(c.rgb) * 0.25);
         return float4(mix(dim, c.rgb, m), c.a);
     }
-    if (m <= 0.0 || u.amount <= 0.0) {
+    if (m <= 0.0) {
         return c;
     }
-    float3 smooth = meanA.sample(s, uv).rgb * c.rgb + meanB.sample(s, uv).rgb;
-    float3 retouched = smooth + u.detail * fineDetail(source, s, uv, c, u);
-    return float4(mix(c.rgb, retouched, m * u.amount), c.a);
+
+    // 잡티: 찾은 자리를 둘레 피부색의 평균으로 메우고 미세한 결을 다시 얹는다.
+    float wSpot = 0.0;
+    float3 fill = c.rgb;
+    float3 fine = fineDetail(source, s, uv, c, u);
+    if (u.spots > 0.0 || u.viewMode == VM_Spots) {
+        float3 ringMean;
+        wSpot = spotScore(spotFine, s, uv, u, ringMean) * spotGuard(source, s, uv, u) * m;
+        fill = ringMean + u.detail * fine;
+    }
+    if (u.viewMode == VM_Spots) {
+        return float4(mix(c.rgb, float3(1.0, 0.1, 0.1), wSpot * 0.8), c.a);
+    }
+
+    // 매끈하게
+    float3 out = c.rgb;
+    if (u.amount > 0.0) {
+        float3 smooth = meanA.sample(s, uv).rgb * c.rgb + meanB.sample(s, uv).rgb;
+        out = mix(c.rgb, smooth + u.detail * fine, m * u.amount);
+    }
+    out = mix(out, fill, wSpot * u.spots);
+    return float4(out, c.a);
 }

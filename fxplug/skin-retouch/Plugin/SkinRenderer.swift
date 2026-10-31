@@ -14,6 +14,8 @@ struct RetouchParams {
     var size: Float = 0.025
     /// 결 살리기 (0 ~ 1)
     var detail: Float = 0.5
+    /// 잡티 지우기 (0 ~ 1)
+    var spots: Float = 0.7
 }
 
 enum PlugInError: Error {
@@ -31,6 +33,14 @@ final class SkinRenderer {
     static let workRadius: Float = 8
     /// 미세 결(모공)을 가르는 반경 = 얼굴 너비의 0.4%
     static let fineFraction: Float = 0.004
+    /// 잡티 찾기: 모공이 사라질 만큼의 흐림 = 얼굴 너비의 0.25%
+    static let spotFineFraction: Float = 0.0025
+    /// 잡티와 비교할 둘레 반경 = 얼굴 너비의 1%. 이보다 큰 점(큰 점, 콧구멍)은 잡티로 보지 않는다
+    static let spotRingFraction: Float = 0.01
+    /// 잡티 찾기를 계산하는 해상도: 얼굴 너비가 이 픽셀 수가 되도록 줄인다
+    static let spotWorkFace: Float = 500
+    /// 안경테, 눈썹 둘레에서 잡티로 보지 않는 반경 = 얼굴 너비의 1.2%
+    static let spotGuardFraction: Float = 0.012
 
     let device: MTLDevice
     private let library: MTLLibrary
@@ -74,13 +84,14 @@ final class SkinRenderer {
               let blank = RegionMask.blank(device) else {
             throw PlugInError.metal("마스크 텍스처를 만들지 못했습니다")
         }
-        var low = blank, meanA = blank, meanB = blank
+        var low = blank, meanA = blank, meanB = blank, spotFine = blank
         var u = SkinUniforms()
         u.viewMode = p.view
         u.tolerance = p.tolerance
         u.amount = p.amount
         u.detail = p.detail
         u.texel = SIMD2(1 / Float(input.width), 1 / Float(input.height))
+        u.spots = p.spots
         if let a = analysis {
             u.hasFace = 1
             u.skinMean = a.skin.mean
@@ -93,6 +104,12 @@ final class SkinRenderer {
             if p.view == Int32(VM_Result.rawValue), p.amount > 0,
                let (ma, mb) = guidedCoefficients(cb, input: input, radius: Float(a.faceWidth) * p.size) {
                 meanA = ma; meanB = mb
+            }
+            u.spotGuard = Float(a.faceWidth) * Self.spotGuardFraction
+            u.spotRing = Float(a.faceWidth) * Self.spotRingFraction
+            let wantSpots = p.view == Int32(VM_Spots.rawValue) || (p.view == Int32(VM_Result.rawValue) && p.spots > 0)
+            if wantSpots, let f = spotLayer(cb, input: input, faceWidth: Float(a.faceWidth)) {
+                spotFine = f
             }
         }
 
@@ -123,6 +140,7 @@ final class SkinRenderer {
         enc.setFragmentTexture(low, index: Int(TI_LowPass.rawValue))
         enc.setFragmentTexture(meanA, index: Int(TI_MeanA.rawValue))
         enc.setFragmentTexture(meanB, index: Int(TI_MeanB.rawValue))
+        enc.setFragmentTexture(spotFine, index: Int(TI_SpotFine.rawValue))
         enc.setFragmentBytes(&u, length: MemoryLayout<SkinUniforms>.stride, index: Int(FI_Uniforms.rawValue))
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
@@ -157,6 +175,26 @@ final class SkinRenderer {
         blur.encode(commandBuffer: cb, sourceTexture: a, destinationTexture: ma)
         blur.encode(commandBuffer: cb, sourceTexture: b, destinationTexture: mb)
         return (ma, mb)
+    }
+
+    /// 잡티 찾기용 흐린 영상: 모공만 사라질 만큼 흐린 것. 얼굴 너비가 spotWorkFace 가 되도록 줄여서 계산한다.
+    private func spotLayer(_ cb: MTLCommandBuffer, input: MTLTexture, faceWidth: Float) -> MTLTexture? {
+        let scale = min(1, Self.spotWorkFace / max(faceWidth, 1))
+        let ww = max(8, Int((Float(input.width) * scale).rounded()))
+        let wh = max(8, Int((Float(input.height) * scale).rounded()))
+        let face = faceWidth * Float(ww) / Float(input.width)
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: ww, height: wh,
+                                                            mipmapped: false)
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .private
+        guard let small = device.makeTexture(descriptor: desc), let fine = device.makeTexture(descriptor: desc) else {
+            return nil
+        }
+        MPSImageBilinearScale(device: device).encode(commandBuffer: cb, sourceTexture: input, destinationTexture: small)
+        MPSImageGaussianBlur(device: device, sigma: max(0.5, face * Self.spotFineFraction))
+            .encode(commandBuffer: cb, sourceTexture: small, destinationTexture: fine)
+        return fine
     }
 
     private func dispatch(_ cb: MTLCommandBuffer, _ ps: MTLComputePipelineState, textures: [MTLTexture],
