@@ -1,0 +1,74 @@
+# 화면 확대 FxPlug 플러그인의 Xcode 프로젝트 설정 (XcodeGen)
+#
+# 이 파일이 원본이고 ScreenZoom.xcodeproj 는 build.sh 가 만든다 (커밋하지 않는다).
+# 구성은 FxPlug SDK 의 Xcode 템플릿(/Library/Developer/Xcode/Templates/FxPlug/FxPlug 4.xctemplate)을 따랐다.
+#   - ScreenZoom.app             : 플러그인을 담는 그릇 앱. 샌드박스 권한만 있다.
+#   - ScreenZoomPlugIn.pluginkit: 실제 효과와 뷰어 조절점. 앱의 Contents/PlugIns 안에 들어간다.
+# 사용자 혼자 쓰므로 이 맥의 Apple Development 인증서로 서명하고 공증은 하지 않는다.
+
+name: ScreenZoom
+options:
+  bundleIdPrefix: com.ibare.spooky
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    ADDITIONAL_SDKS: /Library/Developer/SDKs/FxPlug.sdk
+    FRAMEWORK_SEARCH_PATHS: ["/Library/Frameworks", "$(inherited)"]
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    ARCHS: arm64
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: 5NK357FRB5
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: Apple Development
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  ScreenZoom:
+    type: application
+    platform: macOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ibare.spooky.ScreenZoom
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - target: ScreenZoomPlugIn
+        embed: true
+        copy:
+          destination: plugins
+    scheme: {}
+
+  ScreenZoomPlugIn:
+    type: bundle
+    platform: macOS
+    sources:
+      - path: Plugin
+        excludes: ["Info.plist"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ibare.spooky.ScreenZoom.PlugIn
+        INFOPLIST_FILE: Plugin/Info.plist
+        WRAPPER_EXTENSION: pluginkit
+        MACH_O_TYPE: mh_execute
+        SWIFT_OBJC_BRIDGING_HEADER: Plugin/BridgingHeader.h
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@loader_path/../Frameworks"]
+        OTHER_LDFLAGS: ["-framework", "FxPlug", "-framework", "PluginManager"]
+        SKIP_INSTALL: YES
+    postBuildScripts:
+      # SDK 템플릿과 같다: 실행용 프레임워크를 플러그인 안에 넣고 서명한다.
+      # 템플릿과 달리 Modules 도 뺀다. 앱에 플러그인을 넣을 때 Xcode 가 Headers 와 Modules 를 지워서
+      # 미리 해 둔 프레임워크 서명이 깨지기 때문이다 (확인됨: codesign --verify 가 module.modulemap 누락으로 실패).
+      - name: FxPlug 프레임워크 넣기와 서명
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          dst="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
+          mkdir -p "$dst"
+          for fw in FxPlug PluginManager; do
+            rsync --archive --links --whole-file --no-owner --no-group --checksum --delete --delete-excluded \
+              --exclude='Headers' --exclude='Modules' \
+              "/Library/Developer/Frameworks/$fw.framework/" "$dst/$fw.framework/"
+            codesign --force --options runtime --sign "${EXPANDED_CODE_SIGN_IDENTITY}" "$dst/$fw.framework"
+          done

@@ -45,6 +45,7 @@ FxPlug 4 플러그인(`fxplug/<플러그인>/`)을 만들면서 확인한 사실
   - 플러그인은 `Logger(subsystem: "com.ibare.spooky.SkinRetouch", ...)`로 기록합니다. 보기: `/usr/bin/log show --last 10m --predicate 'subsystem == "com.ibare.spooky.SkinRetouch"'`.
   - 값은 `privacy: .public`을 붙여야 보입니다. 붙이지 않으면 `<private>`로 가려집니다.
   - zsh에서는 `log`가 내장 명령이라 `/usr/bin/log`로 불러야 합니다.
+  - 기록용 전역 상수를 `log`로 두면 수학 함수 `log()`와 이름이 겹쳐 빌드가 깨집니다. 수학 함수는 `Foundation.log(x)`로 부릅니다. 확인됨(빌드).
 - FCP는 시작할 때 모든 FxPlug 플러그인 프로세스를 띄웁니다. 플러그인 프로세스가 떠 있다고 해서 필터가 불린 것은 아닙니다.
 - 플러그인 프로세스의 `failed to get my own sandbox container` 오류는 Beauty Box에도 똑같이 있습니다. 무시해도 됩니다.
 
@@ -55,7 +56,7 @@ FxPlug 4 플러그인(`fxplug/<플러그인>/`)을 만들면서 확인한 사실
 - **픽셀 형식**은 `RGhA`(`kCVPixelFormatType_64RGBAHalf`), **색 공간**은 HDTV(Rec.709) ICC입니다.
 - **이미지 원점은 `kFxImageOrigin_BOTTOM_LEFT`**입니다. 메모리 첫 줄이 그림의 아래입니다. Vision에 넘길 때는 뒤집어야 얼굴을 찾습니다.
 - **해상도는 상황마다 다릅니다.** 멈춘 화면은 원본 해상도(예: 1705×2160)이고, 재생 중에는 줄인 해상도(예: 811×1080)입니다. 반경 같은 값은 픽셀이 아니라 얼굴 너비에 대한 비율로 정해야 결과가 같습니다.
-- 지금까지는 출력 조각이 늘 이미지 전체 한 장이었습니다. 코드는 조각이 나뉘어도 동작하게 짜 두었습니다(`sourceTileRect`가 원본 전체를 요청).
+- **출력 조각이 이미지보다 작을 수 있습니다.** 피부 보정에서는 늘 이미지 전체 한 장이었지만, 화면 확대에서는 원본 3200×1800에 출력 조각 2914×1641(멈춘 화면), 1600×900에 1460×823(재생)이 왔습니다. 좌표는 조각이 아니라 `imagePixelBounds` 기준으로 계산해야 합니다(`ZoomRenderer.uniforms`).
 - 처리 시간: 얼굴 분석(Vision)은 재생 해상도에서 5~8ms, 전체 보정은 원본 해상도에서 프레임당 약 20ms입니다.
 - 템플릿을 처음 설치했을 때 FCP를 다시 실행해도 효과 목록에 보이지 않은 적이 한 번 있습니다. 같은 카테고리에 템플릿을 더 넣고 다시 실행하자 보였습니다. 원인은 밝히지 못했습니다.
 
@@ -67,9 +68,36 @@ FxPlug 4 플러그인(`fxplug/<플러그인>/`)을 만들면서 확인한 사실
 - 시험 이미지는 뷰어 캡처가 아니라 **원본 영상에서 뽑은 프레임**을 씁니다(`ffmpeg -ss <초> -i <영상> -frames:v 1 out.png`). 잡티와 번들거림은 크기가 중요해서 축소된 캡처로는 판단할 수 없습니다.
 - '보기'의 '피부 마스크', '잡티 표시', '번들거림 표시'로 판정 결과를 직접 확인합니다. 전후 차이를 증폭한 그림(`ffmpeg ... blend=all_mode=difference`)을 보면 바뀐 곳이 의도한 곳뿐인지 알 수 있습니다.
 
+- 화면 확대도 같은 방식입니다. `ZoomMath.swift`(영역, 시간표, 곡선, 블러 표본)와 `ZoomRenderer.swift` + `Shaders.metal`은 FxPlug 타입을 쓰지 않습니다. 시험 그림(격자와 점)을 확대해 PNG로 보고, 원점 방향 두 가지와 조각 나눠 그리기가 같은 결과인지 비교합니다.
+
 ## 8. 쓸 수 있는 API (SDK 헤더)
 
 - **`FxTileableEffect`**: 렌더의 기본 틀입니다. 출력은 조각(tile) 단위로 그립니다. 주변 픽셀이 필요한 처리(흐림 등)는 `sourceTileRect`에서 입력 영역을 넓혀야 합니다.
 - **`kFxPropertyKey_PixelTransformSupport`**: 호스트가 축소된 이미지(미리보기 화질 등)를 넘길 수 있습니다. 픽셀 단위 반경은 변환 배율에 맞춰야 합니다.
 - **`scheduleInputs:withPluginState:atTime:error:`** + `FxImageTileRequest`: **다른 시점의 원본 프레임**을 요청할 수 있습니다(`FxTileableEffect.h`). 잡티 판정 깜빡임을 줄이는 데 쓸 수 있습니다.
 - **`FxAnalyzer`**(`FxAnalysis.h`): 클립의 프레임 구간을 **미리 훑어 분석**하는 기능입니다. 얼굴 위치 같은 값을 미리 구해 두는 데 쓸 수 있습니다.
+
+## 9. 시간 (FxTimingAPI_v4)
+
+모두 확인됨(FCP 결과, 플러그인 로그). 클립을 잘라 낸 조각에 효과를 건 경우입니다.
+
+- **렌더 시각(`renderTime`)은 클립 원본 기준 시각**입니다. `startTimeOfInputToFilter`(잘라 낸 앞부분만큼의 시각)와 기준이 같아서, 빼면 조각 처음부터 지난 시간이 됩니다. 예: 시각 1139.271, 입력 시작 1131.564 → 7.708초.
+- `durationTimeOfInputToFilter`는 효과를 건 조각의 길이입니다(예: 15.532초). `startTimeForEffect`, `durationTimeForEffect`도 같은 값이었습니다.
+- `frameDuration`은 클립의 프레임 길이입니다(59.94fps에서 0.017). 타임라인 프레임 속도는 `timelineFpsNumerator(for:)`, `timelineFpsDenominator(for:)`로 얻고, 효과 객체(`self`)를 넘겨야 합니다.
+- 뷰어 조절점이 받는 시각도 렌더와 같은 기준이었습니다.
+- 파라미터가 그대로여도 시간에 따라 결과가 바뀌는 효과는 `kFxPropertyKey_VariesWhenParamsAreStatic`을 `true`로 둡니다.
+
+## 10. 뷰어 조절점 (FxOnScreenControl)
+
+화면 확대의 영역 사각형(`ScreenZoomOSC.swift`)으로 확인했습니다.
+
+- **등록**: `ProPlugPlugInList`에 필터와 별도 항목을 둡니다. `protocolNames`는 `FxOnScreenControl`, `supportedPlugins`에는 필터의 uuid를 적습니다. 형식은 Beauty Box의 Info.plist와 같습니다. 확인됨(FCP 결과).
+- **FCP에 보이려면 감싸는 템플릿의 필터에 `Publish OSC`(id 10005)를 1로 둡니다.** `ozml-notes.md` 11절에 있습니다. 확인됨(FCP 결과).
+- 인스펙터에서 효과를 선택하면 뷰어에 조절점이 그려집니다. 확인됨(FCP 결과).
+- **초기화 선택자**: 조절점 클래스는 필터와 달리 `initWithAPIManager:`를 선언한 프로토콜을 따르지 않습니다. Swift의 `init?(apiManager:)`만 쓰면 선택자가 `initWithApiManager:`가 되므로, `@objc(initWithAPIManager:)`로 이름을 직접 적습니다. 확인됨(빌드: 바이너리의 선택자 문자열).
+- **그리기**: `drawingCoordinates`를 캔버스로 두고, `destinationImage`의 Metal 텍스처에 삼각형으로 그립니다. 확인됨(FCP 결과).
+  - 텍스처 크기는 뷰어 크기입니다(예: 1818×1188). 인자로 오는 `width`, `height`(예: 3840×2160)와 다르므로, 좌표 변환에는 텍스처 크기와 `tilePixelBounds`를 씁니다.
+  - `imageOrigin`은 0(왼쪽 아래)이었습니다. 캔버스 y(위쪽이 +)를 Metal 화면 좌표로 바꿀 때 `1 - 2y/h`로 뒤집습니다.
+  - 효과의 좌표(0~1)는 `convertPoint(fromSpace: OBJECT → CANVAS)`로 바꿉니다. 호스트는 효과 안의 확대를 모르므로, 효과가 화면을 바꿨다면 그 변환을 직접 거쳐 그려야 그림과 맞습니다.
+- **파라미터 바꾸기**: 마우스 처리 안에서 `FxParameterSettingAPI_v5`로 퍼블리시한 파라미터(점, 실수, 체크박스)를 바꾸면 렌더에 바로 반영됩니다. 확인됨(FCP 결과). 헤더에 따르면 조절점에서는 `startAction`/`endAction`을 쓰지 않습니다.
+- **끄는 동안의 상태는 객체가 아니라 프로세스 전체에 둡니다.** 끄는 동안 체크박스 값을 켜고 놓을 때 끄게 했더니, 상태를 조절점 객체에 두었을 때는 놓은 뒤에도 켜진 채로 남은 적이 있습니다. 프로세스 전체로 옮긴 뒤에는 늘 되돌아갔습니다. 확인됨(FCP 결과). 원인이 객체를 새로 만드는 것인지는 밝히지 못했습니다.
