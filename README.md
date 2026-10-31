@@ -26,13 +26,15 @@ Final Cut Pro에서 쓰는 Motion 템플릿(효과, 트랜지션, 타이틀, 제
 |---|---|---|
 | [lecture-pip](packs/lecture-pip/README.md) | 강의 PIP | 강사 PIP 배치 효과(크게 / 작게 · 아래 / 작게 · 위)와, 앞뒤 배치를 스스로 알아내는 전환 |
 | [skin-retouch](packs/skin-retouch/README.md) | 피부 보정 | 얼굴 피부 보정 효과. FxPlug 플러그인(`fxplug/skin-retouch`)을 감싼 템플릿 |
+| [screen-zoom](packs/screen-zoom/README.md) | 화면 확대 | 고른 영역으로 확대했다가 돌아오는 효과. 뷰어 핸들로 영역을 고른다. FxPlug 플러그인(`fxplug/screen-zoom`)을 감싼 템플릿 |
 
 ## FxPlug 플러그인
 
 Motion 필터만으로 안 되는 효과는 FxPlug 플러그인(Swift + Metal)으로 직접 만듭니다. 혼자 쓰는 용도라서 이 맥의 개발 인증서로만 서명합니다.
 
 ```sh
-fxplug/skin-retouch/build.sh   # 빌드 → ~/Applications 에 설치 → 등록
+fxplug/skin-retouch/build.sh   # 빌드 → ~/Applications 에 설치 → 등록 (플러그인마다)
+fxplug/screen-zoom/build.sh
 ./install.sh                   # FCP 에서 보이게 감싸는 템플릿 설치
 ```
 

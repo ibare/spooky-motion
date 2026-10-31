@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	ProPlugPlugInList 의 필터 uuid 는 FCP 용 템플릿(packs/screen-zoom/generate.py)이 이 파일에서 읽어 쓴다.
+	uuid 를 바꾸면 이 효과를 쓰던 타임라인 항목이 플러그인을 못 찾는다.
+	조절점(ScreenZoomOSC)은 별도 항목이고, supportedPlugins 에 필터 uuid 를 적어 잇는다 (Beauty Box 와 같은 형식).
+	group 은 피부 보정 플러그인과 같은 'Spooky' 묶음이다.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>ko</string>
+	<key>CFBundleDisplayName</key>
+	<string>ScreenZoomPlugIn</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>PlugInKit</key>
+	<dict>
+		<key>Attributes</key>
+		<dict>
+			<key>com.apple.protocol</key>
+			<string>FxPlug</string>
+			<key>com.apple.version</key>
+			<string>1.1</string>
+		</dict>
+		<key>PrincipalClass</key>
+		<string>FxPrincipal</string>
+		<key>Protocol</key>
+		<string>PROXPCProtocol</string>
+		<key>Subsystems</key>
+		<array>
+			<string>NSViewService_PKSubsystem</string>
+		</array>
+	</dict>
+	<key>ProPlugDictionaryVersion</key>
+	<string>1.0</string>
+	<key>ProPlugDynamicRegistration</key>
+	<false/>
+	<key>ProPlugPlugInGroupList</key>
+	<array>
+		<dict>
+			<key>groupName</key>
+			<string>Spooky</string>
+			<key>uuid</key>
+			<string>463C953C-A5CF-472B-950E-16D33DB5BD07</string>
+		</dict>
+	</array>
+	<key>ProPlugPlugInList</key>
+	<array>
+		<dict>
+			<key>className</key>
+			<string>ScreenZoomPlugIn</string>
+			<key>displayName</key>
+			<string>화면 확대</string>
+			<key>group</key>
+			<string>463C953C-A5CF-472B-950E-16D33DB5BD07</string>
+			<key>infoString</key>
+			<string>고른 영역으로 확대했다가 원래 화면으로 돌아온다.</string>
+			<key>protocolNames</key>
+			<array>
+				<string>FxFilter</string>
+			</array>
+			<key>uuid</key>
+			<string>574C2763-BCBD-4ED1-A91D-D9892F715B60</string>
+			<key>version</key>
+			<string>1</string>
+		</dict>
+		<dict>
+			<key>className</key>
+			<string>ScreenZoomOSC</string>
+			<key>displayName</key>
+			<string>화면 확대 영역</string>
+			<key>group</key>
+			<string>463C953C-A5CF-472B-950E-16D33DB5BD07</string>
+			<key>infoString</key>
+			<string>확대할 영역을 뷰어에서 고른다.</string>
+			<key>protocolNames</key>
+			<array>
+				<string>FxOnScreenControl</string>
+			</array>
+			<key>supportedPlugins</key>
+			<array>
+				<string>574C2763-BCBD-4ED1-A91D-D9892F715B60</string>
+			</array>
+			<key>uuid</key>
+			<string>1F3DA71F-9B88-4BC4-A581-6616F8D736C5</string>
+		</dict>
+	</array>
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key>
+		<string>Application</string>
+		<key>JoinExistingSession</key>
+		<true/>
+		<key>RunLoopType</key>
+		<string>_NSApplicationMain</string>
+		<key>_AdditionalSubServices</key>
+		<dict>
+			<key>viewbridge</key>
+			<true/>
+		</dict>
+	</dict>
+</dict>
+</plist>

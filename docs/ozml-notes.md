@@ -155,4 +155,8 @@ Motion 템플릿(.moef 효과, .motr 트랜지션, .moti 타이틀, .motn 제너
 - **퍼블리시**: 필터 파라미터는 `<target object="필터 id" channel="./<파라미터 id>"/>`로 퍼블리시합니다. 묶음 안의 파라미터는 `./9/37`처럼 이어 씁니다(`Beauty Box.moef`).
 - **효과의 Effect Source에 애플 필터를 걸 수 있습니다.** 강의 PIP의 '노출'은 Effect Source에 감마 필터(`PAEGamma`, UUID `9F2DAEB8-1875-4E0E-B62F-DF1E28C1999B`, `pluginVersion` 0)를 걸고 `./1`(Gamma)을 퍼블리시한 것입니다. 확인됨(FCP 결과).
   - 형식은 애플 템플릿 `Heat Wave`, `X-Ray`, `Bleach Bypass`의 감마 필터와 같습니다. Gamma 파라미터 flags는 `8606711824`입니다.
+- **필터의 뷰어 조절점(OSC)을 FCP에 보이게 하려면** 필터 요소 안에 `<parameter name="Publish OSC" id="10005" flags="8606711808" default="0" value="1"/>`를 둡니다.
+  - 애플 템플릿: `Vignette.moef`의 Vignette 필터가 이 값입니다(Center 조절점).
+  - 서드파티 템플릿: `Beauty Box.moef`도 1입니다(flags는 `8589934592`).
+  - 확인됨(FCP 결과): 화면 확대의 영역 사각형이 이 값으로 FCP 뷰어에 보였습니다. 조절점이 바꾸는 파라미터는 모두 퍼블리시해 둡니다.
 - **FCP에서 FxPlug 플러그인을 쓰려면 반드시 이렇게 템플릿으로 감싸야 합니다.** 근거: 애플 문서 'Preparing plug-ins for use in Final Cut Pro'. 플러그인 쪽 사실은 `docs/fxplug-notes.md`에 있습니다.
