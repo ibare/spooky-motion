@@ -1,7 +1,9 @@
 // 피부 보정 셰이더
 //
-// 2단계(피부 마스크): 결과는 원본 그대로이고, '피부 마스크' 보기에서는
-// 피부로 판정한 곳만 원래 색으로, 나머지는 어두운 흑백으로 보여 준다.
+// 매끈하게: 빠른 가이드 필터(He et al.)로 피부의 낮은 대비 얼룩(잡티, 붉은 기)을 평평하게 하고,
+// 원본의 미세한 결(모공)을 일부 되돌린 뒤, 피부 마스크만큼 원본과 섞는다.
+// 가이드 필터 계수(a, b)는 저해상도에서 구하고(squareKernel, coeffKernel, MPS 흐림),
+// 여기서 원본 해상도로 q = mean(a) * I + mean(b) 를 계산한다.
 
 #include <metal_stdlib>
 #include <simd/simd.h>
@@ -32,6 +34,38 @@ vertexShader(uint vertexID [[vertex_id]],
     return out;
 }
 
+// MARK: 가이드 필터 (저해상도)
+
+/// out = in * in (채널별)
+kernel void squareKernel(texture2d<float, access::read> input [[texture(0)]],
+                         texture2d<float, access::write> output [[texture(1)]],
+                         uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+    float4 c = input.read(gid);
+    output.write(float4(c.rgb * c.rgb, 1.0), gid);
+}
+
+/// 창 안의 분산이 eps 보다 작으면(잡티 같은 낮은 대비) a → 0 이라 평균으로 평평해지고,
+/// 크면(눈꺼풀, 콧날 같은 경계) a → 1 이라 원본이 남는다. (채널별로 자기 자신을 길잡이로 쓴다)
+kernel void coeffKernel(texture2d<float, access::read> meanI [[texture(0)]],
+                        texture2d<float, access::read> meanII [[texture(1)]],
+                        texture2d<float, access::write> outA [[texture(2)]],
+                        texture2d<float, access::write> outB [[texture(3)]],
+                        constant GuidedUniforms &g [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= outA.get_width() || gid.y >= outA.get_height()) return;
+    float3 m = meanI.read(gid).rgb;
+    float3 var = max(meanII.read(gid).rgb - m * m, 0.0);
+    float3 a = var / (var + g.eps);
+    float3 b = m - a * m;
+    outA.write(float4(a, 1.0), gid);
+    outB.write(float4(b, 1.0), gid);
+}
+
+// MARK: 최종 합성 (원본 해상도)
+
 static float luma(float3 c)
 {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
@@ -58,19 +92,43 @@ static float skinMask(float4 c, float4 low, float region, constant SkinUniforms 
     return region * colorScore * lumaGate;
 }
 
+/// 미세 결: 원본 - (반경 fineRadius 의 3x3 가중 평균). 모공, 솜털 크기의 무늬만 남는다.
+static float3 fineDetail(texture2d<float> source, sampler s, float2 uv, float4 c, constant SkinUniforms &u)
+{
+    float2 o = u.texel * u.fineRadius;
+    float3 sum = c.rgb * 4.0;
+    sum += source.sample(s, uv + float2(o.x, 0)).rgb * 2.0;
+    sum += source.sample(s, uv - float2(o.x, 0)).rgb * 2.0;
+    sum += source.sample(s, uv + float2(0, o.y)).rgb * 2.0;
+    sum += source.sample(s, uv - float2(0, o.y)).rgb * 2.0;
+    sum += source.sample(s, uv + o).rgb;
+    sum += source.sample(s, uv - o).rgb;
+    sum += source.sample(s, uv + float2(o.x, -o.y)).rgb;
+    sum += source.sample(s, uv + float2(-o.x, o.y)).rgb;
+    return c.rgb - sum / 16.0;
+}
+
 fragment float4 skinFragment(RasterizerData in [[stage_in]],
                              texture2d<float> source [[texture(TI_Source)]],
                              texture2d<float> region [[texture(TI_Region)]],
                              texture2d<float> lowPass [[texture(TI_LowPass)]],
+                             texture2d<float> meanA [[texture(TI_MeanA)]],
+                             texture2d<float> meanB [[texture(TI_MeanB)]],
                              constant SkinUniforms &u [[buffer(FI_Uniforms)]])
 {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
     float2 uv = in.textureCoordinate;
     float4 c = source.sample(s, uv);
-    if (u.viewMode == VM_Result) {
+    float m = skinMask(c, lowPass.sample(s, uv), region.sample(s, uv).r, u);
+
+    if (u.viewMode == VM_Mask) {
+        float3 dim = float3(luma(c.rgb) * 0.25);
+        return float4(mix(dim, c.rgb, m), c.a);
+    }
+    if (m <= 0.0 || u.amount <= 0.0) {
         return c;
     }
-    float m = skinMask(c, lowPass.sample(s, uv), region.sample(s, uv).r, u);
-    float3 dim = float3(luma(c.rgb) * 0.25);
-    return float4(mix(dim, c.rgb, m), c.a);
+    float3 smooth = meanA.sample(s, uv).rgb * c.rgb + meanB.sample(s, uv).rgb;
+    float3 retouched = smooth + u.detail * fineDetail(source, s, uv, c, u);
+    return float4(mix(c.rgb, retouched, m * u.amount), c.a);
 }

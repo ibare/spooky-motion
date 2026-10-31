@@ -5,8 +5,9 @@ import os
 
 /// 피부 보정 효과.
 ///
-/// 2단계(피부 마스크): 얼굴 특징점과 피부색으로 보정할 피부를 고른다.
-/// '보기'를 '피부 마스크'로 두면 고른 곳만 원래 색으로 보여 준다. '결과'는 아직 원본 그대로다.
+/// 얼굴 특징점과 피부색으로 피부를 고르고(FaceAnalysis, RegionMask),
+/// 가이드 필터로 잡티 같은 낮은 대비 얼룩을 평평하게 한 뒤 미세한 결을 되돌린다(SkinRenderer).
+/// 이 파일은 FxPlug 와의 연결(파라미터, 영역, 렌더 호출)만 맡는다.
 /// 구조는 SDK 템플릿의 예제(TileableRemoteBrightness)를 따랐다.
 @objc(SkinRetouchPlugIn)
 class SkinRetouchPlugIn: NSObject, FxTileableEffect {
@@ -17,13 +18,9 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         static let view: UInt32 = 10
         static let tolerance: UInt32 = 11
         static let excludeBeard: UInt32 = 12
-    }
-
-    /// 렌더로 넘기는 파라미터 값 묶음
-    struct State {
-        var view: Int32 = Int32(VM_Result.rawValue)
-        var excludeBeard: Int32 = 1
-        var tolerance: Float = 3
+        static let amount: UInt32 = 13
+        static let size: UInt32 = 14
+        static let detail: UInt32 = 15
     }
 
     private let apiManager: PROAPIAccessing
@@ -39,14 +36,24 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         guard let api = apiManager.api(for: FxParameterCreationAPI_v5.self) as? FxParameterCreationAPI_v5 else {
             throw PlugInError.apiUnavailable
         }
+        let d = RetouchParams()
         let flags = FxParameterFlags(kFxParameterFlag_DEFAULT)
-        api.addPopupMenu(withName: "보기", parameterID: Param.view, defaultValue: 0,
+        api.addPopupMenu(withName: "보기", parameterID: Param.view, defaultValue: UInt32(d.view),
                          menuEntries: ["결과", "피부 마스크"], parameterFlags: flags)
+        api.addFloatSlider(withName: "정도", parameterID: Param.amount,
+                           defaultValue: Double(d.amount * 100), parameterMin: 0, parameterMax: 100,
+                           sliderMin: 0, sliderMax: 100, delta: 1, parameterFlags: flags)
+        api.addFloatSlider(withName: "크기", parameterID: Param.size,
+                           defaultValue: Double(d.size * 100), parameterMin: 0.5, parameterMax: 8,
+                           sliderMin: 0.5, sliderMax: 6, delta: 0.1, parameterFlags: flags)
+        api.addFloatSlider(withName: "결 살리기", parameterID: Param.detail,
+                           defaultValue: Double(d.detail * 100), parameterMin: 0, parameterMax: 100,
+                           sliderMin: 0, sliderMax: 100, delta: 1, parameterFlags: flags)
         api.addFloatSlider(withName: "피부색 범위", parameterID: Param.tolerance,
-                           defaultValue: 3.0, parameterMin: 0.5, parameterMax: 6.0,
+                           defaultValue: Double(d.tolerance), parameterMin: 0.5, parameterMax: 6.0,
                            sliderMin: 0.5, sliderMax: 5.0, delta: 0.1, parameterFlags: flags)
         api.addToggleButton(withName: "수염 영역 제외", parameterID: Param.excludeBeard,
-                            defaultValue: true, parameterFlags: flags)
+                            defaultValue: d.excludeBeard, parameterFlags: flags)
     }
 
     func properties(_ properties: AutoreleasingUnsafeMutablePointer<NSDictionary>?) throws {
@@ -63,14 +70,24 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         guard let api = apiManager.api(for: FxParameterRetrievalAPI_v6.self) as? FxParameterRetrievalAPI_v6 else {
             throw PlugInError.apiUnavailable
         }
+        var p = RetouchParams()
         var view: Int32 = 0
         var beard = ObjCBool(true)
-        var tolerance = 3.0
+        var tolerance = Double(p.tolerance), amount = Double(p.amount * 100)
+        var size = Double(p.size * 100), detail = Double(p.detail * 100)
         api.getIntValue(&view, fromParameter: Param.view, at: renderTime)
         api.getBoolValue(&beard, fromParameter: Param.excludeBeard, at: renderTime)
         api.getFloatValue(&tolerance, fromParameter: Param.tolerance, at: renderTime)
-        var state = State(view: view, excludeBeard: beard.boolValue ? 1 : 0, tolerance: Float(tolerance))
-        pluginState?.pointee = withUnsafeBytes(of: &state) { NSData(bytes: $0.baseAddress, length: $0.count) }
+        api.getFloatValue(&amount, fromParameter: Param.amount, at: renderTime)
+        api.getFloatValue(&size, fromParameter: Param.size, at: renderTime)
+        api.getFloatValue(&detail, fromParameter: Param.detail, at: renderTime)
+        p.view = view
+        p.excludeBeard = beard.boolValue
+        p.tolerance = Float(tolerance)
+        p.amount = Float(amount / 100)
+        p.size = Float(size / 100)
+        p.detail = Float(detail / 100)
+        pluginState?.pointee = withUnsafeBytes(of: &p) { NSData(bytes: $0.baseAddress, length: $0.count) }
     }
 
     // MARK: 영역
@@ -92,99 +109,41 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
 
     func renderDestinationImage(_ destinationImage: FxImageTile, sourceImages: [FxImageTile],
                                 pluginState: Data?, at renderTime: CMTime) throws {
-        let st: State = pluginState?.withUnsafeBytes { $0.loadUnaligned(as: State.self) } ?? State()
+        let p: RetouchParams = pluginState?.withUnsafeBytes { $0.loadUnaligned(as: RetouchParams.self) }
+            ?? RetouchParams()
         let src = sourceImages[0]
         let started = Date()
 
-        let cache = MetalDeviceCache.shared
-        let registryID = src.deviceRegistryID
-        let pixelFormat = MetalDeviceCache.pixelFormat(for: destinationImage)
-        guard let device = cache.device(registryID: registryID),
-              let queue = cache.commandQueue(registryID: registryID),
-              let commandBuffer = queue.makeCommandBuffer() else {
+        guard let e = MetalDeviceCache.shared.entry(registryID: src.deviceRegistryID),
+              let cb = e.queue.makeCommandBuffer(),
+              let input = src.metalTexture(for: e.device),
+              let output = destinationImage.metalTexture(for: e.device) else {
             throw PlugInError.noDevice
         }
-        let pipeline = try cache.pipeline(registryID: registryID, pixelFormat: pixelFormat)
-        commandBuffer.label = "SkinRetouch"
+        cb.label = "SkinRetouch"
 
-        // 얼굴 분석은 마스크가 필요할 때만 한다 (2단계에서는 '피부 마스크' 보기일 때만).
-        let wantMask = st.view == Int32(VM_Mask.rawValue)
-        let analysis = wantMask
+        // 정도가 0 이고 결과 보기이면 원본 그대로라 얼굴을 찾을 필요가 없다.
+        let needFace = p.view == Int32(VM_Mask.rawValue) || p.amount > 0
+        let analysis = needFace
             ? src.ioSurface.flatMap {
                 FaceAnalyzer.analyze($0, topLeftOrigin: src.imageOrigin == UInt(kFxImageOrigin_TOP_LEFT),
-                                     excludeBeard: st.excludeBeard != 0)
+                                     excludeBeard: p.excludeBeard)
             }
             : nil
         let analysisMs = Date().timeIntervalSince(started) * 1000
-        let srcSize = CGSize(width: src.ioSurface.width, height: src.ioSurface.height)
-        guard let region = RegionMask.make(analysis, sourceSize: srcSize, device: device,
-                                           commandBuffer: commandBuffer) else {
-            throw PlugInError.metal("마스크 텍스처를 만들지 못했습니다")
-        }
 
-        var u = SkinUniforms()
-        u.viewMode = st.view
-        u.tolerance = st.tolerance
-        if let a = analysis {
-            u.hasFace = 1
-            u.skinMean = a.skin.mean
-            u.invCov = a.skin.invCov
-            u.lumaRef = a.skin.lumaRef
-        }
-
-        let inputTexture = src.metalTexture(for: device)
-        let outputTexture = destinationImage.metalTexture(for: device)
-        var lowPass: MTLTexture? = nil
-        if let a = analysis, let input = inputTexture {
-            lowPass = RegionMask.lowPass(input, faceWidth: a.faceWidth, device: device, commandBuffer: commandBuffer)
-        }
-        guard let low = lowPass ?? RegionMask.blank(device) else {
-            throw PlugInError.metal("흐린 영상 텍스처를 만들지 못했습니다")
-        }
-
-        let attachment = MTLRenderPassColorAttachmentDescriptor()
-        attachment.texture = outputTexture
-        attachment.clearColor = MTLClearColorMake(0, 0, 0, 0)
-        attachment.loadAction = .clear
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0] = attachment
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
-            throw PlugInError.metal("렌더 인코더를 만들지 못했습니다")
-        }
-
-        // 출력 조각을 덮는 사각형. 텍스처 좌표는 원본 전체에서 이 조각이 차지하는 부분이다.
-        // 출력의 첫 줄(화면 좌표 위쪽)이 메모리 첫 줄이며, 그 줄은 조각의 bottom 값 쪽이다 (SDK 예제와 같은 배치).
+        // 출력 조각이 원본 텍스처에서 차지하는 범위. 메모리 첫 줄은 조각의 bottom 값 쪽이다.
         let d = destinationImage.tilePixelBounds, s = src.tilePixelBounds
         let sw = Float(s.right - s.left), sh = Float(s.top - s.bottom)
-        let u0 = Float(d.left - s.left) / sw, u1 = Float(d.right - s.left) / sw
-        let v0 = Float(d.bottom - s.bottom) / sh, v1 = Float(d.top - s.bottom) / sh
-        let w = Float(d.right - d.left), h = Float(d.top - d.bottom)
-        var vertices = [
-            Vertex2D(position: vector_float2(w / 2, -h / 2), textureCoordinate: vector_float2(u1, v1)),
-            Vertex2D(position: vector_float2(-w / 2, -h / 2), textureCoordinate: vector_float2(u0, v1)),
-            Vertex2D(position: vector_float2(w / 2, h / 2), textureCoordinate: vector_float2(u1, v0)),
-            Vertex2D(position: vector_float2(-w / 2, h / 2), textureCoordinate: vector_float2(u0, v0)),
-        ]
-        var viewportSize = simd_uint2(UInt32(w), UInt32(h))
+        let texRect = SIMD4<Float>(Float(d.left - s.left) / sw, Float(d.right - s.left) / sw,
+                                   Float(d.bottom - s.bottom) / sh, Float(d.top - s.bottom) / sh)
 
-        encoder.setViewport(MTLViewport(originX: 0, originY: 0, width: Double(w), height: Double(h),
-                                        znear: -1, zfar: 1))
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setVertexBytes(&vertices, length: MemoryLayout<Vertex2D>.stride * vertices.count,
-                               index: Int(VI_Vertices.rawValue))
-        encoder.setVertexBytes(&viewportSize, length: MemoryLayout<simd_uint2>.size,
-                               index: Int(VI_ViewportSize.rawValue))
-        encoder.setFragmentTexture(inputTexture, index: Int(TI_Source.rawValue))
-        encoder.setFragmentTexture(region, index: Int(TI_Region.rawValue))
-        encoder.setFragmentTexture(low, index: Int(TI_LowPass.rawValue))
-        encoder.setFragmentBytes(&u, length: MemoryLayout<SkinUniforms>.stride, index: Int(FI_Uniforms.rawValue))
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        encoder.endEncoding()
+        try e.renderer.encode(cb, input: input, output: output, analysis: analysis, params: p, texRect: texRect)
+        cb.commit()
+        cb.waitUntilCompleted()
 
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
         let totalMs = Date().timeIntervalSince(started) * 1000
-        logThrottled(st, analysis, src, destinationImage,
+        logThrottled(p, analysis, src, destinationImage,
                      timing: String(format: "분석=%.0fms 전체=%.0fms", analysisMs, totalMs))
     }
 
@@ -194,7 +153,7 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
     private static var lastLog = Date.distantPast
 
     /// 렌더는 프레임마다 불리므로 1초에 한 번만 기록한다.
-    private func logThrottled(_ st: State, _ a: FaceAnalysis?, _ src: FxImageTile, _ dst: FxImageTile,
+    private func logThrottled(_ p: RetouchParams, _ a: FaceAnalysis?, _ src: FxImageTile, _ dst: FxImageTile,
                               timing: String) {
         Self.logLock.lock()
         let now = Date()
@@ -204,17 +163,17 @@ class SkinRetouchPlugIn: NSObject, FxTileableEffect {
         guard due else { return }
 
         let b = dst.tilePixelBounds
-        let tile = "\(timing) \(b.right - b.left)x\(b.top - b.bottom) 원점=\(src.imageOrigin)"
+        let head = "render 보기=\(p.view) 정도=\(p.amount) 크기=\(p.size) 결=\(p.detail) \(timing) "
+            + "\(b.right - b.left)x\(b.top - b.bottom) 원점=\(src.imageOrigin)"
         if let a {
             let m = a.skin.mean
             log.notice("""
-                render 보기=\(st.view, privacy: .public) \(tile, privacy: .public) \
-                얼굴너비=\(Int(a.faceWidth), privacy: .public) 뒤집힘=\(a.flipped, privacy: .public) \
-                피부색도=(\(m.x, privacy: .public), \(m.y, privacy: .public)) 밝기=\(a.skin.lumaRef, privacy: .public) \
-                표본=\(a.skin.samples, privacy: .public) 색공간=\(String(describing: src.colorSpace), privacy: .public)
+                \(head, privacy: .public) 얼굴너비=\(Int(a.faceWidth), privacy: .public) \
+                뒤집힘=\(a.flipped, privacy: .public) 피부색도=(\(m.x, privacy: .public), \(m.y, privacy: .public)) \
+                밝기=\(a.skin.lumaRef, privacy: .public) 표본=\(a.skin.samples, privacy: .public)
                 """)
         } else {
-            log.notice("render 보기=\(st.view, privacy: .public) \(tile, privacy: .public) 얼굴=없음")
+            log.notice("\(head, privacy: .public) 얼굴=없음")
         }
     }
 }

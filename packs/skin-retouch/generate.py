@@ -35,6 +35,9 @@ EFFECT_NAME = "피부 보정"
 # id 는 fxplug/skin-retouch/Plugin/SkinRetouchPlugIn.swift 의 Param 과 같아야 한다.
 PUBLISHED = [
     (10, "보기"),
+    (13, "정도"),
+    (14, "크기"),
+    (15, "결 살리기"),
     (11, "피부색 범위"),
     (12, "수염 영역 제외"),
 ]
