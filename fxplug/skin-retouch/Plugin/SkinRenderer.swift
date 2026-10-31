@@ -16,6 +16,8 @@ struct RetouchParams {
     var detail: Float = 0.5
     /// 잡티 지우기 (0 ~ 1)
     var spots: Float = 0.7
+    /// 번들거림 줄이기 (0 ~ 1)
+    var shine: Float = 0.5
 }
 
 enum PlugInError: Error {
@@ -41,11 +43,18 @@ final class SkinRenderer {
     static let spotWorkFace: Float = 500
     /// 안경테, 눈썹 둘레에서 잡티로 보지 않는 반경 = 얼굴 너비의 1.2%
     static let spotGuardFraction: Float = 0.012
+    /// 번들거림 기준 영상: 피부 밝기 중앙값의 이 배수보다 밝으면 눌러 둔다
+    static let shineCap: Float = 1.05
+    /// 번들거림 기준 영상의 흐림 = 얼굴 너비의 6% (번들거리는 넓은 자리보다 크게)
+    static let shineBlurFraction: Float = 0.06
+    /// 번들거림 기준 영상을 계산하는 해상도: 얼굴 너비가 이 픽셀 수가 되도록 줄인다
+    static let shineWorkFace: Float = 200
 
     let device: MTLDevice
     private let library: MTLLibrary
     private let square: MTLComputePipelineState
     private let coeff: MTLComputePipelineState
+    private let clamp: MTLComputePipelineState
     private var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
     private let lock = NSLock()
 
@@ -53,11 +62,13 @@ final class SkinRenderer {
         self.device = device
         self.library = library
         guard let sq = library.makeFunction(name: "squareKernel"),
-              let co = library.makeFunction(name: "coeffKernel") else {
+              let co = library.makeFunction(name: "coeffKernel"),
+              let cl = library.makeFunction(name: "clampKernel") else {
             throw PlugInError.metal("셰이더 함수를 찾지 못했습니다")
         }
         square = try device.makeComputePipelineState(function: sq)
         coeff = try device.makeComputePipelineState(function: co)
+        clamp = try device.makeComputePipelineState(function: cl)
     }
 
     /// 출력 픽셀 형식에 맞는 렌더 파이프라인 (vertexShader + skinFragment)
@@ -84,7 +95,7 @@ final class SkinRenderer {
               let blank = RegionMask.blank(device) else {
             throw PlugInError.metal("마스크 텍스처를 만들지 못했습니다")
         }
-        var low = blank, meanA = blank, meanB = blank, spotFine = blank
+        var low = blank, meanA = blank, meanB = blank, spotFine = blank, shineBase = blank
         var u = SkinUniforms()
         u.viewMode = p.view
         u.tolerance = p.tolerance
@@ -92,6 +103,7 @@ final class SkinRenderer {
         u.detail = p.detail
         u.texel = SIMD2(1 / Float(input.width), 1 / Float(input.height))
         u.spots = p.spots
+        u.shine = p.shine
         if let a = analysis {
             u.hasFace = 1
             u.skinMean = a.skin.mean
@@ -110,6 +122,11 @@ final class SkinRenderer {
             let wantSpots = p.view == Int32(VM_Spots.rawValue) || (p.view == Int32(VM_Result.rawValue) && p.spots > 0)
             if wantSpots, let f = spotLayer(cb, input: input, faceWidth: Float(a.faceWidth)) {
                 spotFine = f
+            }
+            let wantShine = p.view == Int32(VM_Shine.rawValue) || (p.view == Int32(VM_Result.rawValue) && p.shine > 0)
+            if wantShine, let b = shineLayer(cb, input: input, faceWidth: Float(a.faceWidth),
+                                             lumaCap: a.skin.lumaRef * Self.shineCap) {
+                shineBase = b
             }
         }
 
@@ -141,6 +158,7 @@ final class SkinRenderer {
         enc.setFragmentTexture(meanA, index: Int(TI_MeanA.rawValue))
         enc.setFragmentTexture(meanB, index: Int(TI_MeanB.rawValue))
         enc.setFragmentTexture(spotFine, index: Int(TI_SpotFine.rawValue))
+        enc.setFragmentTexture(shineBase, index: Int(TI_ShineBase.rawValue))
         enc.setFragmentBytes(&u, length: MemoryLayout<SkinUniforms>.stride, index: Int(FI_Uniforms.rawValue))
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
@@ -195,6 +213,29 @@ final class SkinRenderer {
         MPSImageGaussianBlur(device: device, sigma: max(0.5, face * Self.spotFineFraction))
             .encode(commandBuffer: cb, sourceTexture: small, destinationTexture: fine)
         return fine
+    }
+
+    /// 번들거림 기준 영상: 반사광을 눌러 두고 크게 흐린 것. 얼굴 너비가 shineWorkFace 가 되도록 줄여서 계산한다.
+    private func shineLayer(_ cb: MTLCommandBuffer, input: MTLTexture, faceWidth: Float,
+                            lumaCap: Float) -> MTLTexture? {
+        let scale = min(1, Self.shineWorkFace / max(faceWidth, 1))
+        let ww = max(8, Int((Float(input.width) * scale).rounded()))
+        let wh = max(8, Int((Float(input.height) * scale).rounded()))
+        let face = faceWidth * Float(ww) / Float(input.width)
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: ww, height: wh,
+                                                            mipmapped: false)
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .private
+        guard let small = device.makeTexture(descriptor: desc), let capped = device.makeTexture(descriptor: desc),
+              let base = device.makeTexture(descriptor: desc) else { return nil }
+        MPSImageBilinearScale(device: device).encode(commandBuffer: cb, sourceTexture: input, destinationTexture: small)
+        var g = ClampUniforms(lumaCap: lumaCap)
+        dispatch(cb, clamp, textures: [small, capped], width: ww, height: wh, bytes: &g,
+                 length: MemoryLayout<ClampUniforms>.size)
+        MPSImageGaussianBlur(device: device, sigma: max(1, face * Self.shineBlurFraction))
+            .encode(commandBuffer: cb, sourceTexture: capped, destinationTexture: base)
+        return base
     }
 
     private func dispatch(_ cb: MTLCommandBuffer, _ ps: MTLComputePipelineState, textures: [MTLTexture],

@@ -5,6 +5,7 @@
 // 가이드 필터 계수(a, b)는 저해상도에서 구하고(squareKernel, coeffKernel, MPS 흐림),
 // 여기서 원본 해상도로 q = mean(a) * I + mean(b) 를 계산한다.
 // 잡티 지우기: 모공만 지운 흐린 영상에서 둘레 8방향보다 모두 어둡거나 붉은 점을 찾아 둘레 피부색으로 메운다.
+// 번들거림 줄이기: 반사광을 눌러 두고 크게 흐린 기준 피부보다 밝고 흰빛인 곳의 밝기를 덜어낸다.
 
 #include <metal_stdlib>
 #include <simd/simd.h>
@@ -65,6 +66,20 @@ kernel void coeffKernel(texture2d<float, access::read> meanI [[texture(0)]],
     outB.write(float4(b, 1.0), gid);
 }
 
+/// 번들거림 기준 영상의 앞 단계: 피부 밝기 중앙값보다 많이 밝은 픽셀(반사광)을 눌러 둔다.
+/// 이것을 크게 흐리면 반사광이 섞이지 않은 주변 피부색이 된다.
+kernel void clampKernel(texture2d<float, access::read> input [[texture(0)]],
+                        texture2d<float, access::write> output [[texture(1)]],
+                        constant ClampUniforms &g [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+    float4 c = input.read(gid);
+    float y = dot(c.rgb, float3(0.2126, 0.7152, 0.0722));
+    float k = y > g.lumaCap ? g.lumaCap / y : 1.0;
+    output.write(float4(c.rgb * k, 1.0), gid);
+}
+
 // MARK: 최종 합성 (원본 해상도)
 
 static float luma(float3 c)
@@ -75,7 +90,7 @@ static float luma(float3 c)
 /// 피부일 정도 (0 ~ 1) = 얼굴 영역 × 피부색에 가까운 정도 × 너무 어둡지 않음
 ///   c   : 원본 픽셀 (밝기 판정. 가는 안경테도 걸러지도록 원본 해상도로 본다)
 ///   low : 저해상도 흐린 영상 (색 판정. 잡티와 모공이 주변 피부에 섞여 구멍이 나지 않는다)
-static float skinMask(float4 c, float4 low, float region, constant SkinUniforms &u)
+static float skinMask(float4 c, float4 low, float region, constant SkinUniforms &u, float tolScale = 1.0)
 {
     if (u.hasFace < 0.5 || region <= 0.0) {
         return 0.0;
@@ -87,7 +102,8 @@ static float skinMask(float4 c, float4 low, float region, constant SkinUniforms 
     // 색도: 밝기와 상관없는 색의 비율. 그늘진 피부와 밝은 피부가 같은 값을 갖는다.
     float2 d = low.rg / sum - u.skinMean;
     float d2 = d.x * d.x * u.invCov.x + 2.0 * d.x * d.y * u.invCov.y + d.y * d.y * u.invCov.z;
-    float colorScore = exp(-0.5 * d2 / (u.tolerance * u.tolerance));
+    float tol = u.tolerance * tolScale;
+    float colorScore = exp(-0.5 * d2 / (tol * tol));
     // 안경테, 눈썹, 수염처럼 피부보다 훨씬 어두운 곳은 거른다. 잡티(피부의 60~80% 밝기)는 통과한다.
     float lumaGate = smoothstep(0.25, 0.45, luma(c.rgb) / max(u.lumaRef, 1e-4));
     return region * colorScore * lumaGate;
@@ -107,6 +123,31 @@ static float3 fineDetail(texture2d<float> source, sampler s, float2 uv, float4 c
     sum += source.sample(s, uv + float2(o.x, -o.y)).rgb;
     sum += source.sample(s, uv + float2(-o.x, o.y)).rgb;
     return c.rgb - sum / 16.0;
+}
+
+// MARK: 번들거림
+
+// 기준 피부보다 밝은 비율. 이 범위에서 0 → 1 로 번들거림이라고 본다
+constant float kShine0 = 0.08;
+constant float kShine1 = 0.30;
+// 번들거림을 줄일 때 남기는 밝기 초과분의 비율 (0 이면 기준 피부 밝기까지 완전히 누른다)
+constant float kShineKeep = 0.3;
+
+/// 색이 회색(흰빛)에서 떨어진 정도
+static float chromaSat(float3 c)
+{
+    float s = c.r + c.g + c.b;
+    return length(c / max(s, 1e-4) - float3(1.0 / 3.0));
+}
+
+/// 번들거림일 정도 (0 ~ 1): 기준 피부보다 밝고, 피부색보다 흰빛인 곳.
+/// 조명을 잘 받았을 뿐인 피부는 채도가 남아 있어서 덜 걸린다.
+static float shineScore(float3 c, float3 base)
+{
+    float yb = luma(base);
+    float excess = (luma(c) - yb) / max(yb, 1e-4);
+    float desat = 1.0 - chromaSat(c) / max(chromaSat(base), 1e-4);
+    return smoothstep(kShine0, kShine1, excess) * smoothstep(-0.1, 0.35, desat);
 }
 
 // MARK: 잡티 찾기
@@ -173,18 +214,39 @@ fragment float4 skinFragment(RasterizerData in [[stage_in]],
                              texture2d<float> meanA [[texture(TI_MeanA)]],
                              texture2d<float> meanB [[texture(TI_MeanB)]],
                              texture2d<float> spotFine [[texture(TI_SpotFine)]],
+                             texture2d<float> shineBase [[texture(TI_ShineBase)]],
                              constant SkinUniforms &u [[buffer(FI_Uniforms)]])
 {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
     float2 uv = in.textureCoordinate;
     float4 c = source.sample(s, uv);
-    float m = skinMask(c, lowPass.sample(s, uv), region.sample(s, uv).r, u);
+    float4 low = lowPass.sample(s, uv);
+    float reg = region.sample(s, uv).r;
+    float m = skinMask(c, low, reg, u);
 
     if (u.viewMode == VM_Mask) {
         float3 dim = float3(luma(c.rgb) * 0.25);
         return float4(mix(dim, c.rgb, m), c.a);
     }
-    if (m <= 0.0) {
+
+    // 번들거림: 반사광은 색이 피부에서 멀어져(흰빛, 모니터 빛이면 보랏빛) 피부 마스크에서 빠지기 쉬우므로
+    // 피부색 범위를 두 배로 넓힌 마스크를 쓴다. 안경알 반사처럼 색이 아주 다른 것은 여전히 빠진다.
+    // (확인됨(시험 프로그램): 볼의 보랏빛 반사광 자리가 기본 마스크에서 빠졌다)
+    float wShine = 0.0;
+    float3 shineTarget = c.rgb;
+    if (u.shine > 0.0 || u.viewMode == VM_Shine) {
+        float3 base = shineBase.sample(s, uv).rgb;
+        // 판정은 흐린 영상으로 한다. 번들거림은 넓은 영역이라, 원본 픽셀로 보면 피부 결을 따라 얼룩덜룩해진다.
+        // (확인됨(시험 프로그램): 원본 픽셀로 판정하면 이마가 얼룩덜룩하게 잡혔다)
+        wShine = shineScore(low.rgb, base) * skinMask(c, low, reg, u, 2.0);
+        float yb = luma(base);
+        float yT = yb + (luma(c.rgb) - yb) * kShineKeep;
+        shineTarget = base * (yT / max(yb, 1e-4));
+    }
+    if (u.viewMode == VM_Shine) {
+        return float4(mix(c.rgb, float3(0.1, 0.4, 1.0), wShine * 0.8), c.a);
+    }
+    if (m <= 0.0 && wShine <= 0.0) {
         return c;
     }
 
@@ -208,5 +270,6 @@ fragment float4 skinFragment(RasterizerData in [[stage_in]],
         out = mix(c.rgb, smooth + u.detail * fine, m * u.amount);
     }
     out = mix(out, fill, wSpot * u.spots);
+    out = mix(out, shineTarget + u.detail * fine, wShine * u.shine);
     return float4(out, c.a);
 }

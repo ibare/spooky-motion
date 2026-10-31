@@ -16,7 +16,8 @@ typedef enum TextureIndex {
     TI_LowPass = 2,   // 피부색 판정용 저해상도 흐린 영상
     TI_MeanA   = 3,   // 가이드 필터 계수 a 의 평균 (저해상도)
     TI_MeanB   = 4,   // 가이드 필터 계수 b 의 평균 (저해상도)
-    TI_SpotFine = 5   // 잡티 찾기: 모공이 사라질 만큼만 흐린 영상
+    TI_SpotFine = 5,  // 잡티 찾기: 모공이 사라질 만큼만 흐린 영상
+    TI_ShineBase = 6  // 번들거림: 밝은 곳을 눌러 두고 크게 흐린 영상 (번들거림이 없었다면의 피부색)
 } TextureIndex;
 
 typedef enum FragmentIndex {
@@ -32,7 +33,8 @@ typedef struct Vertex2D {
 typedef enum ViewMode {
     VM_Result = 0,
     VM_Mask   = 1,
-    VM_Spots  = 2    // 잡티로 판정한 곳을 원본 위에 빨갛게 표시
+    VM_Spots  = 2,   // 잡티로 판정한 곳을 원본 위에 빨갛게 표시
+    VM_Shine  = 3    // 번들거림으로 판정한 곳을 원본 위에 파랗게 표시
 } ViewMode;
 
 typedef struct SkinUniforms {
@@ -48,6 +50,7 @@ typedef struct SkinUniforms {
     float spots;              // 잡티 지우기 (0 ~ 1)
     float spotRing;           // 잡티와 비교할 둘레의 반경 (원본 픽셀). 이보다 큰 점은 잡티로 보지 않는다
     float spotGuard;          // 이 반경(원본 픽셀) 안에 안경테, 눈썹 같은 어두운 것이 있으면 잡티로 보지 않는다
+    float shine;              // 번들거림 줄이기 (0 ~ 1)
     int viewMode;             // ViewMode
 } SkinUniforms;
 
@@ -55,5 +58,10 @@ typedef struct SkinUniforms {
 typedef struct GuidedUniforms {
     float eps;                // 클수록 더 큰 대비까지 평평하게 만든다
 } GuidedUniforms;
+
+/// 번들거림 기준 영상 계산용
+typedef struct ClampUniforms {
+    float lumaCap;            // 이 밝기보다 밝은 픽셀은 이 밝기로 눌러 둔다 (색 비율은 그대로)
+} ClampUniforms;
 
 #endif /* ShaderTypes_h */
