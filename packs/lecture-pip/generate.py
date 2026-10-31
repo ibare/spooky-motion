@@ -4,7 +4,7 @@
 강의 PIP 팩 생성기
 
 만드는 것 (카테고리 '강의 PIP')
-  - 효과    : PIP 레이아웃.moef  (인스펙터: 배치 / 좌우 반전 / 인물 위치 / 인물 크기 / 모서리 둥글기)
+  - 효과    : PIP 레이아웃.moef  (인스펙터: 배치 / 좌우 반전 / 인물 위치 / 인물 크기 / 노출 / 모서리 둥글기)
   - 트랜지션: PIP 전환.motr      (인스펙터: 움직임 = 고급 / 부드럽게)
 
 실행
@@ -58,6 +58,10 @@ DEFAULT_LAYOUT = 1     # 효과를 처음 적용했을 때의 배치 (LAYOUTS �
 
 FRAMING_SCALE = 0.8    # 창 안에서 강사 영상의 기본 확대율 (인스펙터 '인물 크기')
 MIRROR_DEFAULT = 0     # '좌우 반전' 체크박스의 처음 값 (0 = 꺼짐, 1 = 켜짐)
+# '노출'은 Motion 감마 필터라 흰색과 검은색은 두고 중간 톤만 움직인다. 1 = 그대로.
+# FCP '색상 조정'의 노출처럼 전체를 같은 비율로 낮추면 흰 벽까지 회색이 되고 얼굴이 탁해지는데,
+# 감마는 흰색이 그대로이고 어둡게 할수록 색이 조금 진해져서 과노출을 자연스럽게 되돌린다.
+EXPOSURE_DEFAULT = 1.0
 
 # 트랜지션은 하나이고, 인스펙터의 '움직임' 팝업으로 아래 항목 중 하나를 고른다: (팝업 이름, 움직임)
 #   ("bezier", (x1, y1, x2, y2)) : CSS cubic-bezier 와 같은 뜻의 이징 곡선
@@ -137,9 +141,11 @@ def find_probe(i):
 
 
 # ─────────────────────────── 효과 (.moef) ───────────────────────────
+GAMMA_UUID = "9F2DAEB8-1875-4E0E-B62F-DF1E28C1999B"  # Motion '감마' 필터 (PAEGamma)
+
 def build_effect():
     F = Factories(["Project", "Widget", "Image", "Shape", "Rig", "Rig Widget",
-                   "Rig Behavior", "ChPosition", "ChScale", "ChDouble", "Channel"])
+                   "Rig Behavior", "ChPosition", "ChScale", "ChDouble", "Channel", "ProPlugin Filter"])
     ids = Ids()
     ids.project = ids()
     rig_id, widget_id, mirror_widget_id = ids(), ids(), ids()
@@ -147,6 +153,7 @@ def build_effect():
     person_id, mirror_id = ids(), ids()
     footage_id, clip_id = ids(), ids()
     rb_pos_id, rb_scale_id, rb_mirror_id = ids(), ids(), ids()
+    exposure_id = ids()  # 기존 노드 id 가 밀리지 않도록 맨 뒤에 받는다
 
     n = len(LAYOUTS)
     widget = popup_widget(F, "배치", widget_id, [lb for lb, *_ in LAYOUTS], DEFAULT_LAYOUT)
@@ -159,8 +166,11 @@ def build_effect():
     # 둥근 창 (스텐실 알파): 그룹 원점 기준, '크게' 크기. 창 안쪽만 남긴다.
     shape = shape_node(F, "둥근 창", shape_id, LARGE_W * K, LARGE_H * K, ROUNDNESS * K, STENCIL_ALPHA)
 
-    # 강사 영상 (Effect Source)
-    source = effect_source(F, src_id, clip_id)
+    # 강사 영상 (Effect Source) + 노출(감마) 필터. 창 안의 강사 영상에만 걸린다.
+    # 감마 필터 형식은 애플 템플릿(Heat Wave, X-Ray, Bleach Bypass)과 같다. 파라미터 'Gamma' 는 id 1.
+    gamma_params = [] if EXPOSURE_DEFAULT == 1.0 else [P("Gamma", 1, 8606711824, 1, EXPOSURE_DEFAULT)]
+    exposure = fxplug_filter(F, exposure_id, "노출", GAMMA_UUID, 0, params=gamma_params, plugin_name="PAEGamma")
+    source = effect_source(F, src_id, clip_id, filters=[exposure])
 
     # 그룹 3겹: PIP(배치 리그) > 인물(위치·크기, 퍼블리시) > 반전(체크박스 리그) > Effect Source
     # 반전을 가장 안쪽에 두어야 반전을 켜도 '인물 위치' X 를 늘리면 화면에서 오른쪽으로 간다.
@@ -191,6 +201,7 @@ def build_effect():
         E("target", {"object": mirror_widget_id, "channel": "./2/100", "name": "좌우 반전"}),
         E("target", {"object": person_id, "channel": "./1/100/101", "name": "인물 위치"}),
         E("target", {"object": person_id, "channel": "./1/100/105", "name": "인물 크기"}),
+        E("target", {"object": exposure_id, "channel": "./1", "name": "노출"}),
         E("target", {"object": shape_id, "channel": "./2/353/144", "name": "모서리 둥글기"}),
     ]
     fc = footage(footage_id, [media_clip("Effect Source", clip_id, "Drop Zone.tiff", 1200)])
